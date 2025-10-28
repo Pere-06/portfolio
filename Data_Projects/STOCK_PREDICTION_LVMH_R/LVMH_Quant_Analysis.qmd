@@ -1,0 +1,193 @@
+---
+title: "Quantitative Time Series & Fundamental Analysis of LVMH Stock"
+author: "Pere Caparrós Arnaiz"
+format: html
+---
+
+# Introduction
+
+This study provides a quantitative analysis of LVMH’s stock price dynamics using time series modeling, with a specific focus on forecasting short-term movements. By leveraging 10 years of historical price data, the analysis aims to identify patterns, assess risks, and generate model-based projections to inform investment decision-making. Core methodologies include data validation, stationarity testing, ARIMA time series modeling, and the visual interpretation of forecast confidence intervals. The results offer practical insights for investors and analysts seeking to navigate the uncertainty inherent in equity markets.
+
+## Loading Libraries
+
+```{r}
+library(quantmod)
+library(tidyverse)
+library(ggplot2)
+library(plotly) 
+library(tidyquant)
+library(lubridate)
+library(xts)
+library(zoo)
+library(forecast)
+library(timetk)
+library(TSstudio)
+library(tseries)
+library(rmarkdown)
+library(fpp3)
+```
+
+## Getting the data from Yahoo Finance
+
+A 10-year historical time frame (2015–2025) was selected for this study to facilitate a robust evaluation of LVMH’s stock cycles, long-term trends, and structural changes. This enables thorough assessment of the firm’s performance across different market conditions and key industry developments.
+
+```{r}
+lvmh_data <- tq_get("MC.PA", from = "2015-01-01", to = Sys.Date(), get = "stock.prices")
+head(lvmh_data)
+
+```
+
+An assessment of missing and null values in the extracted dataset reveals that there are no NA or null entries. This ensures the validity of subsequent analyses and eliminates the need for additional data imputation or cleaning at this stage.
+
+```{r}
+lvmh_data %>% is.na() %>% sum()
+```
+
+```{r}
+lvmh_data %>% is.null() %>% sum()
+```
+
+The following figure displays the evolution of LVMH’s adjusted closing stock price over the selected ten-year period. The plot provides clear visibility into prevailing trends, volatility patterns, and notable market cycles, forming the empirical foundation for subsequent statistical and forecasting analyses.
+
+```{r}
+ggplot(lvmh_data, aes(x = date, y = adjusted)) +
+  geom_line(color = "#2D70B2") +
+  labs(title = "LVMH Stock Price (Adjusted Close, 2015-2025)",
+       x = "Date",
+       y = "Adjusted Close Price (EUR)") +
+  theme_minimal()
+
+```
+
+Calculation of daily log returns.
+
+```{r}
+lvmh_data = lvmh_data %>%
+  arrange(date) %>%
+  mutate(log_return = log(adjusted / lag(adjusted)))
+```
+
+```{r}
+ggplot(lvmh_data, aes(x = date, y = log_return)) +
+  geom_line(color = '#EE7733') +
+  labs(title = "LVMH Daily Log Returns", x = "Date", y = "Log Return")
+
+```
+
+We proceed to analyze the statistical properties, seasonality, and inherent patterns in LVMH’s stock price through return calculations, time series decomposition, and autocorrelation analysis. These techniques enable us to elucidate underlying trends, periodic cycles, and the potential for predictive modeling.
+
+```{r}
+adj_close_ts = ts(lvmh_data$adjusted, frequency = 252) # Open Markets Days
+decomp = stl(adj_close_ts, s.window = 'periodic')
+autoplot(decomp)
+```
+
+```{r}
+acf(na.omit(lvmh_data$log_return), main='ACF: LVMH Daily Log Return')
+```
+
+The autocorrelation plot of LVMH’s daily log returns demonstrates an absence of significant autocorrelation at all lags, consistent with the weak form of market efficiency. The returns series effectively resembles white noise, indicating that past returns have minimal predictive power for future movements—a characteristic typical of liquid, well-traded equities.
+
+```{r}
+adf.test(na.omit(lvmh_data$log_return))
+```
+
+The Augmented Dickey-Fuller test was applied to assess the stationarity of LVMH log returns. The resulting p-value (0.01) is well below common significance thresholds, indicating robust support for the stationarity hypothesis. This finding validates the application of ARIMA-family time series models for subsequent analysis and forecasting.
+
+```{r}
+lvmh_returns_ts = ts(na.omit(lvmh_data$log_return))
+fit_ARIMA_1 = auto.arima(lvmh_returns_ts)
+summary(fit_ARIMA_1)
+```
+
+The log returns series for LVMH was optimally modeled as an ARIMA(1,0,0) process, indicating a slight negative autocorrelation in returns (ar1 = -0.0276) and a negligible positive drift (mean ≈ 0.0006). Model selection was validated with low AIC and BIC values, and error metrics were consistent with expectations for well-behaved financial return series. This underscores the efficiency and unpredictability characteristic of liquid equity markets.
+
+```{r}
+checkresiduals(fit_ARIMA_1)
+```
+
+Diagnostic checks of the fitted ARIMA model’s residuals reveal no significant autocorrelation and an approximately normal, zero-centered distribution. This confirms the adequacy of the model in capturing the essential dynamics of LVMH’s log returns, with the remaining errors exhibiting the characteristics of white noise. Accordingly, the model’s forecasts can be interpreted as statistically robust and unbiased within the limits of historical data.
+
+```{r}
+forecast_horizon = 20
+fc = forecast(fit_ARIMA_1, h = forecast_horizon) 
+  autoplot(fc) +
+  labs(
+    title = "ARIMA Forecast: LVMH Daily Log Returns",
+    x = "Time",
+    y = "Log Return"
+  ) +
+  theme_minimal()
+```
+
+The ARIMA forecast for LVMH’s daily log returns indicates no significant directional bias, consistent with established financial theory. By transforming these return forecasts into price projections, a scenario for future price evolution is presented, providing an empirical baseline for short-term planning. While such projections offer valuable insights, it is important to acknowledge inherent limitations due to market unpredictability.
+
+```{r}
+last_price = tail(na.omit(lvmh_data$adjusted), 1)
+
+future_prices = last_price * exp(cumsum(fc$mean))
+
+future_dates = seq(max(lvmh_data$date) + 1, by = 'day', length.out = forecast_horizon)
+future_df = data.frame(date = future_dates, price = as.numeric(future_prices))
+
+recent_days <- 60
+zoom_start <- max(lvmh_data$date) - recent_days
+zoom_end <- max(future_df$date)
+
+ggplot() +
+  geom_line(data = lvmh_data, aes(x = date, y = adjusted), color = '#2D70B2')+
+  geom_line(data = future_df, aes(x = date, y = price), color = "red", linetype = "dashed") +
+  labs(title = "LVMH Actual Price and ARIMA Forecast",
+       x = "Date", y = "Adjusted Close Price (EUR)") +
+  theme_minimal() +
+  coord_cartesian(xlim = c(zoom_start, zoom_end), ylim = c(430, 680))
+
+```
+
+```{r}
+future_prices_mean  <- last_price * exp(cumsum(fc$mean))
+future_prices_lower <- last_price * exp(cumsum(fc$lower[,2]))  # 95% lower bound
+future_prices_upper <- last_price * exp(cumsum(fc$upper[,2]))  # 95% upper bound
+
+
+future_df <- data.frame(
+  date  = future_dates,
+  price = as.numeric(future_prices_mean),
+  lower = as.numeric(future_prices_lower),
+  upper = as.numeric(future_prices_upper)
+)
+```
+
+```{r}
+ggplot() +
+  geom_line(data = lvmh_data, aes(x = date, y = adjusted), color = '#2D70B2')+
+  geom_line(data = future_df, aes(x = date, y = price), color = "red", linetype = "dashed") +
+  geom_ribbon(data = future_df, aes(x = date, ymin = lower, ymax = upper), fill = "red", alpha = 0.2) +
+  labs(
+    title = "LVMH Price and ARIMA Forecast with Confidence Bands",
+    x = "Date", y = "Adjusted Close Price (EUR)"
+  ) +
+  theme_minimal() +
+  coord_cartesian(xlim = c(zoom_start, zoom_end), ylim = c(200, 1000))
+
+```
+
+The chart above displays the recent trajectory of LVMH’s adjusted closing price together with a 20-day ahead ARIMA forecast and its associated confidence bands. What is immediately apparent is the significant width of the forecast interval: while the mean projection (dashed red line) suggests very limited expected movement, the broad red shaded area demonstrates that the model anticipates a wide range of plausible outcomes in the coming days. This indicates that the price could move within this entire area, providing little definitive guidance on the direction or magnitude of any short-term shifts. The large confidence bands reflect the elevated volatility and unpredictability characteristic of financial assets like LVMH, highlighting the limits of statistical forecasting for pinpointing near-term price action. In essence, the model signals substantial uncertainty for the investment horizon considered.
+
+```{r}
+ggplot() +
+  geom_line(data = lvmh_data, aes(x = date, y = adjusted), color = '#2D70B2')+
+  geom_line(data = future_df, aes(x = date, y = price), color = "red", linetype = "dashed") +
+  geom_ribbon(data = future_df, aes(x = date, ymin = lower, ymax = upper), fill = "red", alpha = 0.2) +
+  labs(
+    title = "LVMH Price and ARIMA Forecast with Confidence Bands",
+    x = "Date", y = "Adjusted Close Price (EUR)"
+  ) +
+  theme_minimal() 
+```
+
+We observe the same chart but with the entire data for last 10 years.
+
+# Conclusion
+
+The quantitative modeling conducted in this project confirms both the efficiency and the inherent unpredictability of LVMH’s stock returns. While the ARIMA model is statistically robust and provides a sound framework for scenario analysis, its forecast conveys considerable uncertainty—underlining that short-term movements are highly sensitive to unforeseen market developments. For investors, this signals the importance of diversifying positions, continuously monitoring for new information, and calibrating risk appetite. Forecasts should be regarded as support for disciplined decision-making, rather than as sources of certainty about future prices. In conclusion, while LVMH remains a prominent player in the luxury sector, prudent investment strategies should prioritize risk management, scenario planning, and ongoing fundamental analysis alongside quantitative models.
